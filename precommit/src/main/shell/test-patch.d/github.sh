@@ -160,12 +160,20 @@ function github_breakup_url
 ## @description initialize github
 function github_initialize
 {
-  if [[ -z "${GITHUB_REPO}" ]]; then
-    GITHUB_REPO=${GITHUB_REPO_DEFAULT:-}
-  fi
-
   if [[ -n "${GITHUB_TOKEN}" ]]; then
     GITHUB_AUTH=(-H "Authorization: token ${GITHUB_TOKEN}")
+  fi
+
+  if [[ -z "${GITHUB_REPO}" ]]; then
+    yetus_error "WARNING: --github-repo not autodetermined or provided. Brute forcing."
+    # if repo is _still_ unknown, brute force it
+    domain=${GITHUB_BASE_URL##*/}
+    origin=$("${GIT}" remote get-url origin)
+    if [[ ${origin} =~ ${domain} ]]; then
+      repo=${origin##*:}
+      GITHUB_REPO=${repo%%\.git}
+      yetus_error "WARNING: GitHub brute force result: ${GITHUB_REPO}"
+    fi
   fi
 
   # if the default branch hasn't been set yet, ask GitHub
