@@ -942,6 +942,7 @@ function github_status_recovery
   declare filename
   declare retval=0
   declare retrydir
+  declare ghr
 
   # get the first filename
   filename=$(find "${PATCH_DIR}/github-status-retry" -type f -name '1.json' 2>/dev/null)
@@ -952,9 +953,9 @@ function github_status_recovery
   fi
 
   retrydir="${filename##*/github-status-retry/}"
-  GITHUB_REPO=$(echo "${retrydir}" | cut -f1-2 -d/)
+  ghr=$(echo "${retrydir}" | cut -f1-2 -d/)
+  GITHUB_REPO=${GITHUB_REPO:-${ghr}}
   GIT_BRANCH_SHA=$(echo "${retrydir}" | cut -f3 -d/)
-
 
   github_initialize
 
@@ -965,6 +966,11 @@ function github_status_recovery
 
   if [[ -z "${GITHUB_REPO}" ]]; then
     yetus_error "ERROR: --github-repo is not defined."
+    return 1
+  fi
+
+  if ! github_start_checkrun; then
+    yetus_error "ERROR: Cannot generate a Github Check Run ID"
     return 1
   fi
 
