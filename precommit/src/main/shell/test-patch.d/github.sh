@@ -35,9 +35,10 @@ GITHUB_REPO=""
 # user settings
 GITHUB_TOKEN="${GITHUB_TOKEN-}"
 GITHUB_ISSUE=""
-GITHUB_USE_EMOJI_VOTE=false
+#GITHUB_USE_EMOJI_VOTE=false
 GITHUB_STATUS_RECOVERY_COUNTER=1
 GITHUB_STATUS_RECOVER_TOOL=false
+GITHUB_ANNOTATION_LIMIT=50
 declare -a GITHUB_AUTH
 
 # private globals...
@@ -45,13 +46,14 @@ GITHUB_BRIDGED=false
 
 function github_usage
 {
+  yetus_add_option "--github-annotation-limit=<int>" "The maximum number of annotations to send to GitHub (default: '${GITHUB_ANNOTATION_LIMIT}')"
   yetus_add_option "--github-api-url=<url>" "The URL of the API for github (default: '${GITHUB_API_URL}')"
   yetus_add_option "--github-base-url=<url>" "The URL of the github server (default:'${GITHUB_BASE_URL}')"
   yetus_add_option "--github-repo=<repo>" "github repo to use (default:'${GITHUB_REPO}')"
   yetus_add_option "--github-token=<token>" "The token to use to read/write to github"
-  if [[ "${GITHUB_STATUS_RECOVER_TOOL}" == false ]]; then
-    yetus_add_option "--github-use-emoji-vote" "Whether to use emoji to represent the vote result on github [default: ${GITHUB_USE_EMOJI_VOTE}]"
-  fi
+  #if [[ "${GITHUB_STATUS_RECOVER_TOOL}" == false ]]; then
+  #  yetus_add_option "--github-use-emoji-vote" "Whether to use emoji to represent the vote result on github [default: ${GITHUB_USE_EMOJI_VOTE}]"
+  #fi
 }
 
 function github_parse_args
@@ -60,6 +62,10 @@ function github_parse_args
 
   for i in "$@"; do
     case ${i} in
+      --github-annotation-limit=*)
+        delete_parameter "${i}"
+        GITHUB_ANNOTATION_LIMIT=${i#*=}
+      ;;
       --github-api-url=*)
         delete_parameter "${i}"
         GITHUB_API_URL=${i#*=}
@@ -76,10 +82,10 @@ function github_parse_args
         delete_parameter "${i}"
         GITHUB_TOKEN=${i#*=}
       ;;
-      --github-use-emoji-vote)
-        delete_parameter "${i}"
-        GITHUB_USE_EMOJI_VOTE=true
-      ;;
+ #     --github-use-emoji-vote)
+ #       delete_parameter "${i}"
+ #       GITHUB_USE_EMOJI_VOTE=true
+ #     ;;
     esac
   done
 }
@@ -164,14 +170,18 @@ function github_initialize
 
   # if the default branch hasn't been set yet, ask GitHub
   if [[ -z "${PATCH_BRANCH_DEFAULT}"  && -n "${GITHUB_REPO}" && "${OFFLINE}" == false ]]; then
-    "${CURL}" --silent --fail \
+    if [[ ! -f "${PATCH_DIR}/github-repo.json" ]]; then
+      "${CURL}" --silent --fail \
           -H "Accept: application/vnd.github.v3.full+json" \
           "${GITHUB_AUTH[@]}" \
           --output "${PATCH_DIR}/github-repo.json" \
           --location \
          "${GITHUB_API_URL}/repos/${GITHUB_REPO}" \
          > /dev/null
-    PATCH_BRANCH_DEFAULT=$("${GREP}" default_branch "${PATCH_DIR}/github-repo.json" | head -1 | cut -d\" -f4)
+    fi
+    if [[ -f "${PATCH_DIR}/github-repo.json" ]]; then
+      PATCH_BRANCH_DEFAULT=$("${GREP}" default_branch "${PATCH_DIR}/github-repo.json" | head -1 | cut -d\" -f4)
+    fi
   fi
 
   if [[ "${PROJECT_NAME}" == "unknown" ]]; then
@@ -604,12 +614,28 @@ function github_linecomments
   fi
 
   if [[ "${OFFLINE}" == true ]]; then
-    echo "Github Plugin: Running in offline, comment skipped."
+    yetus_error "WARNING: Running offline, GitHub annotations skipped."
     return 0
   fi
 
   if [[ "${#GITHUB_AUTH[@]}" -eq 0 ]]; then
     return 0
+  fi
+
+  if [[ ${GITHUB_ANNOTATION_LIMIT} -eq 0 ]]; then
+    return 0
+  fi
+
+  ((GITHUB_ANNOTATION_LIMIT=GITHUB_ANNOTATION_LIMIT - 1))
+
+  if [[ ${GITHUB_ANNOTATION_LIMIT} -eq 0 ]]; then
+    yetus_error "WARNING: GitHub annotations limit (${GITHUB_ANNOTATION_LIMIT}) reached."
+    return 0
+  fi
+
+  if [[ -z "${GITHUB_REPO}" ]]; then
+    yetus_error "ERROR: --github-repo is not defined."
+    return 1
   fi
 
   if [[ -z "${GITHUB_CHECK_RUN_ID}" ]]; then
@@ -650,18 +676,19 @@ function github_linecomments
       ${linehandler[@]}
       ${colhandler[@]}
       "annotation_level": "failure",
-      "message": "${newtext}"
+      "message": "${plugin}: ${newtext}"
     }]
   }
 }
 EOF
 
-  "${CURL}" --fail -X PATCH \
+  "${CURL}" --silent --fail -X PATCH \
     -H "Accept: application/vnd.github.antiope-preview+json" \
     -H "Content-Type: application/json" \
      "${GITHUB_AUTH[@]}" \
+         --output "${PATCH_DIR}/github-check-annotation-response.json" \
     -d @"${tempfile}" \
-    --silent --location \
+    --location \
     "${GITHUB_API_URL}/repos/${GITHUB_REPO}/check-runs/${GITHUB_CHECK_RUN_ID}" \
     2>/dev/null
   rm "${tempfile}"
@@ -678,7 +705,12 @@ function github_write_comment
   declare restfile="${PATCH_DIR}/ghcomment.$$"
 
   if [[ "${OFFLINE}" == true ]]; then
-    echo "Github Plugin: Running in offline, comment skipped."
+    yetus_error "WARNING: Running offline, GitHub comment skipped."
+    return 0
+  fi
+
+  if [[ -z "${GITHUB_REPO}" ]]; then
+    yetus_error "ERROR: --github-repo is not defined."
     return 0
   fi
 
@@ -692,16 +724,17 @@ function github_write_comment
   } > "${restfile}"
 
   if [[ "${#GITHUB_AUTH[@]}" -lt 1 ]]; then
-    echo "Github Plugin: no credentials provided to write a comment."
+    yetus_error "ERROR: No GitHub credentials defined."
     return 0
   fi
 
-  "${CURL}" -X POST \
+  "${CURL}" --silent --fail -X POST \
        -H "Accept: application/vnd.github.v3.full+json" \
        -H "Content-Type: application/json" \
        "${GITHUB_AUTH[@]}" \
        -d @"${restfile}" \
-       --silent --location \
+       --output "${PATCH_DIR}/github-comment-write-response.json" \
+       --location \
          "${GITHUB_API_URL}/repos/${GITHUB_REPO}/issues/${GITHUB_ISSUE}/comments" \
         >/dev/null
 
@@ -872,6 +905,11 @@ function github_status_write
     return 0
   fi
 
+  if [[ -z "${GITHUB_REPO}" ]]; then
+    echo "GitHub Repo not defined."
+    return 0
+  fi
+
   "${CURL}" --silent --fail -X POST \
     -H "Accept: application/vnd.github.v3.full+json" \
     -H "Content-Type: application/json" \
@@ -879,7 +917,8 @@ function github_status_write
     -d @"${filename}" \
     --location \
     "${GITHUB_API_URL}/repos/${GITHUB_REPO}/statuses/${GIT_BRANCH_SHA}" \
-    > /dev/null
+    --output "${PATCH_DIR}/gitub-status-response-${GITHUB_STATUS_RECOVERY_COUNTER}.json" \
+    2>/dev/null
 
   retval=$?
   if [[ ${retval} -gt 0 ]]; then
@@ -924,6 +963,11 @@ function github_status_recovery
     return 1
   fi
 
+  if [[ -z "${GITHUB_REPO}" ]]; then
+    yetus_error "ERROR: --github-repo is not defined."
+    return 1
+  fi
+
   while read -r; do
     github_status_write "${REPLY}"
     retval=$?
@@ -965,12 +1009,17 @@ function github_finalreport
   big_console_header "Adding GitHub Statuses"
 
   if [[ "${#GITHUB_AUTH[@]}" -lt 1 ]]; then
-    echo "Github Plugin: no credentials provided to write a status."
+    yetus_error "ERROR: no credentials provided to write a status."
     return 0
   fi
 
   if [[ -z "${GIT_BRANCH_SHA}" ]]; then
-    echo "Unknown GIT_BRANCH_SHA defined. Skipping."
+    yetus_error "ERROR: Unknown GIT_BRANCH_SHA defined. Skipping."
+    return 0
+  fi
+
+  if [[ -z "${GITHUB_REPO}" ]]; then
+    yetus_error "ERROR: --github-repo is not defined."
     return 0
   fi
 
