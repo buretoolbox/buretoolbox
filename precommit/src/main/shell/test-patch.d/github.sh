@@ -182,6 +182,7 @@ function github_initialize
 
   if [[ -z "${GITHUB_REPO}" ]]; then
     yetus_error "WARNING: --github-repo not autodetermined or provided. Brute forcing."
+    pushd "${BASEDIR}" >/dev/null || return 1
     github_brute_force_repo_on_remote origin
     if [[ -z "${GITHUB_REPO}" ]]; then
       while read -r; do
@@ -191,6 +192,7 @@ function github_initialize
         fi
       done < <("${GIT}" remote)
     fi
+    popd >/dev/null|| return 1
     if [[ -n "${GITHUB_REPO}" ]]; then
       yetus_error "WARNING: Brute force says ${GITHUB_BASE_URL}/${GITHUB_REPO}"
     fi
