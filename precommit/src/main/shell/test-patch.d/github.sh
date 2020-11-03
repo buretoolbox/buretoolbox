@@ -167,7 +167,11 @@ function github_brute_force_repo_on_remote
 
   remoteurl=$("${GIT}" remote get-url "${remote}")
   if [[ ${remoteurl} =~ ${domain} ]]; then
-    repo=${remoteurl##*:}
+    # chop off (protocol)(hostname)
+    repo=${remoteurl#*${domain}}
+    # chop off / or : in the front
+    repo=${repo:1}
+    # chop off ending .git
     GITHUB_REPO=${repo%%\.git}
   fi
 
