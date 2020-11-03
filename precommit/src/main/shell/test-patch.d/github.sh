@@ -157,6 +157,22 @@ function github_breakup_url
   fi
 }
 
+# @description guess the repo
+function github_brute_force_repo_on_remote
+{
+  declare remote=$1
+  declare domain=${GITHUB_BASE_URL##*/}
+  declare repo
+  declare remoteurl
+
+  remoteurl=$("${GIT}" remote get-url "${remote}")
+  if [[ ${remoteurl} =~ ${domain} ]]; then
+    repo=${remoteurl##*:}
+    GITHUB_REPO=${repo%%\.git}
+  fi
+
+}
+
 ## @description initialize github
 function github_initialize
 {
@@ -166,13 +182,17 @@ function github_initialize
 
   if [[ -z "${GITHUB_REPO}" ]]; then
     yetus_error "WARNING: --github-repo not autodetermined or provided. Brute forcing."
-    # if repo is _still_ unknown, brute force it
-    domain=${GITHUB_BASE_URL##*/}
-    origin=$("${GIT}" remote get-url origin)
-    if [[ ${origin} =~ ${domain} ]]; then
-      repo=${origin##*:}
-      GITHUB_REPO=${repo%%\.git}
-      yetus_error "WARNING: GitHub brute force result: ${GITHUB_REPO}"
+    github_brute_force_repo_on_remote origin
+    if [[ -z "${GITHUB_REPO}" ]]; then
+      while read -r; do
+        github_brute_force_repo_on_remote "${REPLY}"
+        if [[ -n "${GITHUB_REPO}" ]]; then
+          break
+        fi
+      done < <("${GIT}" remote)
+    fi
+    if [[ -n "${GITHUB_REPO}" ]]; then
+      yetus_error "WARNING: Brute force says ${GITHUB_BASE_URL}/${GITHUB_REPO}"
     fi
   fi
 
